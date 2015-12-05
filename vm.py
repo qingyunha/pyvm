@@ -8,6 +8,7 @@ class VirtualMachine(object):
 
     def __init__(self):
         self.stack = []
+        self.env = {}
 
     def run_code(self, code):
         what_to_exec = self._get_exec(code)
@@ -57,8 +58,27 @@ class VirtualMachine(object):
     def LOAD_CONST(self, const):
         self.stack.append(const)
 
+    def LOAD_NAME(self, name):
+        val = self.env[name]
+        self.stack.append(val)
+
+    def STORE_NAME(self, name):
+        val = self.stack.pop()
+        self.env[name] = val
+
+    def BINARY_ADD(self):
+        v1 = self.stack.pop()
+        v2 = self.stack.pop()
+        self.stack.append(v1 + v2)
+
     def PRINT_EXPR(self):
         print self.stack.pop()
+
+    def PRINT_ITEM(self):
+        print self.stack.pop(),
+
+    def PRINT_NEWLINE(self):
+        print
 
     def RETURN_VALUE(self):
         return self.stack.pop()
@@ -79,6 +99,11 @@ if __name__ == '__main__':
 
         def __eq__(self, other):
             return self.s == other
+
+        def clear(self):
+            self.s = ''
+
+    tmpfile = FILE()
 
     def change_stdout_to(f=sys.stdout):
         """ redirect standard output to f
@@ -118,12 +143,25 @@ if __name__ == '__main__':
 
         def test_run_code(self):
             o = compile('4+7+9', '', 'single')
-            f  = FILE()
-            change_stdout_to(f)
+            change_stdout_to(tmpfile)
             r = self.vm.run_code(o)
             change_stdout_to()
             self.assertEqual(r, None)
-            self.assertEqual(f, '20\n')
+            self.assertEqual(tmpfile, '20\n')
+
+            tmpfile.clear()
+
+        def test_variable_and_BINARY_ADD(self):
+            s = 'x=4\ny=5\nprint x+y\n'
+            o = compile(s, '', 'exec')
+
+            change_stdout_to(tmpfile)
+            r = self.vm.run_code(o)
+            change_stdout_to()
+            self.assertEqual(r, None)
+            self.assertEqual(tmpfile, '9\n')
+
+            tmpfile.clear()
 
 
     unittest.main()
