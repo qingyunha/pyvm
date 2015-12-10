@@ -7,22 +7,51 @@ class VirtualMachine(object):
     HAVE_ARGUMENT = 90
 
     def __init__(self):
+        self._reset()
+
+    def _reset(self):
         self.stack = []
         self.env = {}
+        self.last_instr = 0
+        self.jump = False
+        self.running = True
+        self.result = None
 
     def run_code(self, code):
         what_to_exec = self._get_exec(code)
         instructions = what_to_exec['instructions']
 
+        '''
         for instr, arg in instructions:
+            print >> sys.stderr, instr
             vm_instr = getattr(self, instr)
             vm_arg = self._parse_argument(instr, arg, what_to_exec)
             if vm_arg is nil:
                 vm_instr()
             else:
                 vm_instr(vm_arg)
+        '''
+        while self.last_instr < len(instructions) and self.running:
+            instr, arg = instructions[self.last_instr]
+            print >> sys.stderr, instr
+            vm_instr = getattr(self, instr)
+            vm_arg = self._parse_argument(instr, arg, what_to_exec)
+            if vm_arg is nil:
+                r = vm_instr()
+            else:
+                r = vm_instr(vm_arg)
+
+            if self.jump:
+                self.jump = False
+            else:
+                self.last_instr += 1
+
+        self._reset()
+        return r
+
 
     def _get_exec(self, code):
+        self.byte_to_instr = {}
         what_to_exec = {
                 "instructions":[],
                 "constants": code.co_consts,
@@ -31,8 +60,9 @@ class VirtualMachine(object):
 
         byte_codes = [ord(c) for c in code.co_code]
         
-        i = 0
+        i = j = 0
         while i < len(byte_codes):
+            self.byte_to_instr[i] = j
             byte_code = byte_codes[i]
             name = dis.opname[byte_code]
             if byte_code >= self.HAVE_ARGUMENT:
@@ -42,6 +72,7 @@ class VirtualMachine(object):
                 arg = None
             what_to_exec["instructions"].append((dis.opname[byte_code], arg))
             i += 1
+            j += 1
 
         return what_to_exec
 
@@ -54,6 +85,8 @@ class VirtualMachine(object):
             return what_to_exec['constants'][arg]
         elif byte_code in dis.hasname:
             return what_to_exec['names'][arg]
+        else:
+            return arg
 
     def LOAD_CONST(self, const):
         self.stack.append(const)
@@ -81,7 +114,25 @@ class VirtualMachine(object):
         print
 
     def RETURN_VALUE(self):
+        self.running = False
         return self.stack.pop()
+
+    def COMPARE_OP(self, arg):
+        v1 = self.stack.pop()
+        v2 = self.stack.pop()
+        s = repr(v1) + dis.cmp_op[arg] + repr(v2)
+        self.stack.append(eval(s))
+
+    def POP_JUMP_IF_FALSE(self, target):
+        v = self.stack.pop()
+        if v:
+            self.last_instr = self.byte_to_instr[target] 
+            self.jump = True
+        
+    def JUMP_FORWARD(self, step):
+        self.last_instr = self.last_to_instr + step - 1
+        self.jump = True
+
 
 if __name__ == '__main__':
     import unittest
@@ -162,6 +213,24 @@ if __name__ == '__main__':
             self.assertEqual(tmpfile, '9\n')
 
             tmpfile.clear()
+
+        def test_conditions(self):
+            def f():
+                if 5 > 6:
+                    return 5
+                else:
+                    return 6
+            def g():
+                if 5 >= 6:
+                    return 5
+                elif 5 == 6:
+                    return 6
+                else:
+                    return 6
+            r = self.vm.run_code(f.func_code)
+            self.assertEqual(r, 6)
+            r = self.vm.run_code(g.func_code)
+            self.assertEqual(r, 6)
 
 
     unittest.main()
