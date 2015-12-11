@@ -198,6 +198,14 @@ if __name__ == '__main__':
         
         vm = VirtualMachine()
 
+        def setUp(self):
+            change_stdout_to(tmpfile)
+
+        def tearDown(self):
+            change_stdout_to()
+            tmpfile.clear()
+            
+
         def test_get_exec_and_parse_argnment(self):
             o = compile('x = 5', '', 'exec')
             what = self.vm._get_exec(o)
@@ -226,25 +234,18 @@ if __name__ == '__main__':
 
         def test_run_code(self):
             o = compile('4+7+9', '', 'single')
-            change_stdout_to(tmpfile)
             r = self.vm.run_code(o)
-            change_stdout_to()
             self.assertEqual(r, None)
             self.assertEqual(tmpfile, '20\n')
 
-            tmpfile.clear()
 
         def test_variable_and_BINARY_ADD(self):
             s = 'x=4\ny=5\nprint x+y\n'
             o = compile(s, '', 'exec')
 
-            change_stdout_to(tmpfile)
             r = self.vm.run_code(o)
-            change_stdout_to()
             self.assertEqual(r, None)
             self.assertEqual(tmpfile, '9\n')
-
-            tmpfile.clear()
 
         def test_conditions(self):
             def f():
@@ -275,11 +276,7 @@ if __name__ == '__main__':
             s = 'x=0\nfor i in [1,2,3]:\n\tx = x + i\n\tprint x'
             o = compile(s, '', 'exec')
 
-            change_stdout_to(tmpfile)
             r = self.vm.run_code(o)
-            change_stdout_to()
             self.assertEqual(tmpfile.s, '1\n3\n6\n')
-
-            tmpfile.clear()
      
     unittest.main()
