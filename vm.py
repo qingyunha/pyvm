@@ -33,7 +33,7 @@ class VirtualMachine(object):
         '''
         while self.last_instr < len(instructions) and self.running:
             instr, arg = instructions[self.last_instr]
-            print >> sys.stderr, instr
+            #print >> sys.stderr, instr
             vm_instr = getattr(self, instr)
             vm_arg = self._parse_argument(instr, arg, what_to_exec)
             if vm_arg is nil:
@@ -74,6 +74,8 @@ class VirtualMachine(object):
             i += 1
             j += 1
 
+        self.instr_to_byte = dict(zip(self.byte_to_instr.values(),
+                                      self.byte_to_instr.keys()))
         return what_to_exec
 
     
@@ -132,6 +134,36 @@ class VirtualMachine(object):
     def JUMP_FORWARD(self, step):
         self.last_instr = self.last_to_instr + step - 1
         self.jump = True
+
+    def JUMP_ABSOLUTE(self, target):
+        self.last_instr = self.byte_to_instr[target]
+        self.jump = True
+
+    def GET_ITER(self):
+        v = self.stack.pop()
+        self.stack.append(iter(v))
+
+    def FOR_ITER(self, step):
+        v = self.stack[-1]
+        try:
+            self.stack.append(v.next())
+        except StopIteration:
+            self.stack.pop()
+            target = self.instr_to_byte[self.last_instr] + step
+            self.last_instr = self.byte_to_instr[target]
+
+    def SETUP_LOOP(self, arg):
+        pass
+
+    def POP_BLOCK(self):
+        pass
+
+
+    def BUILD_LIST(self, num):
+        r = []
+        for i in range(num):
+            r.insert(0, self.stack.pop())
+        self.stack.append(r)
 
 
 if __name__ == '__main__':
@@ -232,5 +264,22 @@ if __name__ == '__main__':
             r = self.vm.run_code(g.func_code)
             self.assertEqual(r, 6)
 
+        def test_BUILD_LIST(self):
+            def f():
+                return [1,2,3]
 
+            r = self.vm.run_code(f.func_code)
+            self.assertEqual(r, [1,2,3])
+
+        def test_for_loop(self):
+            s = 'x=0\nfor i in [1,2,3]:\n\tx = x + i\n\tprint x'
+            o = compile(s, '', 'exec')
+
+            change_stdout_to(tmpfile)
+            r = self.vm.run_code(o)
+            change_stdout_to()
+            self.assertEqual(tmpfile.s, '1\n3\n6\n')
+
+            tmpfile.clear()
+     
     unittest.main()
