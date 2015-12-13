@@ -1,6 +1,32 @@
 import dis
+import sys
+import logging
 
-nil = object()
+#LOGGING_LEVEL=logging.DEBUG
+LOGGING_LEVEL=logging.ERROR
+logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
+
+class Frame(object):
+    def __init__(self, code_obj, prev_frame, env=None):
+        self.code_obj = code_obj
+        self.prev_frame = prev_frame
+        if env:
+            self.env = env 
+        elif prev_frame:
+            self.env = prev_frame.env
+        else:
+            self.env = {} 
+        self.stack = []
+        self.last_instr = 0
+        self.running = True
+
+class Function(object):
+    def __init__(self, code):
+        self.func_code = code
+
+#nil = object()
+class nil(object):
+    pass
 
 class VirtualMachine(object):
     
@@ -12,30 +38,27 @@ class VirtualMachine(object):
     def _reset(self):
         self.stack = []
         self.env = {}
-        self.last_instr = 0
         self.jump = False
-        self.running = True
         self.result = None
+        self.frames = []
+        self.frame = None
 
     def run_code(self, code):
-        what_to_exec = self._get_exec(code)
+        frame = self.make_frame(code)
+        self.push_frame(frame)
+        return self.run_frame(self.frame)
+
+
+
+    def run_frame(self, frame):
+        what_to_exec = self._get_exec(frame.code_obj)
         instructions = what_to_exec['instructions']
 
-        '''
-        for instr, arg in instructions:
-            print >> sys.stderr, instr
+        while frame.last_instr < len(instructions) and frame.running:
+            instr, arg = instructions[frame.last_instr]
             vm_instr = getattr(self, instr)
             vm_arg = self._parse_argument(instr, arg, what_to_exec)
-            if vm_arg is nil:
-                vm_instr()
-            else:
-                vm_instr(vm_arg)
-        '''
-        while self.last_instr < len(instructions) and self.running:
-            instr, arg = instructions[self.last_instr]
-            #print >> sys.stderr, instr
-            vm_instr = getattr(self, instr)
-            vm_arg = self._parse_argument(instr, arg, what_to_exec)
+            logging.debug(instr + '  ' + str(vm_arg))
             if vm_arg is nil:
                 r = vm_instr()
             else:
@@ -44,14 +67,13 @@ class VirtualMachine(object):
             if self.jump:
                 self.jump = False
             else:
-                self.last_instr += 1
+                frame.last_instr += 1
 
-        self._reset()
         return r
 
 
     def _get_exec(self, code):
-        self.byte_to_instr = {}
+        self.frame.byte_to_instr = {}
         what_to_exec = {
                 "instructions":[],
                 "constants": code.co_consts,
@@ -62,7 +84,7 @@ class VirtualMachine(object):
         
         i = j = 0
         while i < len(byte_codes):
-            self.byte_to_instr[i] = j
+            self.frame.byte_to_instr[i] = j
             byte_code = byte_codes[i]
             name = dis.opname[byte_code]
             if byte_code >= self.HAVE_ARGUMENT:
@@ -74,8 +96,8 @@ class VirtualMachine(object):
             i += 1
             j += 1
 
-        self.instr_to_byte = dict(zip(self.byte_to_instr.values(),
-                                      self.byte_to_instr.keys()))
+        self.frame.instr_to_byte = dict(zip(self.frame.byte_to_instr.values(),
+                                      self.frame.byte_to_instr.keys()))
         return what_to_exec
 
     
@@ -90,6 +112,19 @@ class VirtualMachine(object):
         else:
             return arg
 
+    def make_frame(self, code):
+        return  Frame(code, self.frame)
+
+    def push_frame(self, frame):
+        logging.debug('push frame')
+        self.frames.append(self.frame)
+        self.frame = frame
+
+    def pop_frame(self):
+        logging.debug('pop frame')
+        self.frame = self.frames.pop()
+
+    ### byte instructions
     def LOAD_CONST(self, const):
         self.stack.append(const)
 
@@ -100,6 +135,20 @@ class VirtualMachine(object):
     def STORE_NAME(self, name):
         val = self.stack.pop()
         self.env[name] = val
+    
+    def LOAD_FAST(self, name):
+        name = self.frame.code_obj.co_varnames[name]
+        val = self.env[name]
+        self.stack.append(val)
+
+    def STORE_FAST(self, name):
+        name = self.frame.code_obj.co_varnames[name]
+        val = self.stack.pop()
+        self.env[name] = val
+
+    def LOAD_GLOBAL(self, name):
+        val = self.env[name]
+        self.stack.append(val)
 
     def BINARY_ADD(self):
         v1 = self.stack.pop()
@@ -116,7 +165,7 @@ class VirtualMachine(object):
         print
 
     def RETURN_VALUE(self):
-        self.running = False
+        self.frame.running = False
         return self.stack.pop()
 
     def COMPARE_OP(self, arg):
@@ -128,15 +177,15 @@ class VirtualMachine(object):
     def POP_JUMP_IF_FALSE(self, target):
         v = self.stack.pop()
         if v:
-            self.last_instr = self.byte_to_instr[target] 
+            self.frame.last_instr = self.frame.byte_to_instr[target] 
             self.jump = True
         
     def JUMP_FORWARD(self, step):
-        self.last_instr = self.last_to_instr + step - 1
+        self.frame.last_instr = self.last_to_instr + step - 1
         self.jump = True
 
     def JUMP_ABSOLUTE(self, target):
-        self.last_instr = self.byte_to_instr[target]
+        self.frame.last_instr = self.frame.byte_to_instr[target]
         self.jump = True
 
     def GET_ITER(self):
@@ -149,8 +198,8 @@ class VirtualMachine(object):
             self.stack.append(v.next())
         except StopIteration:
             self.stack.pop()
-            target = self.instr_to_byte[self.last_instr] + step
-            self.last_instr = self.byte_to_instr[target]
+            target = self.frame.instr_to_byte[self.frame.last_instr] + step
+            self.frame.last_instr = self.frame.byte_to_instr[target]
 
     def SETUP_LOOP(self, arg):
         pass
@@ -164,6 +213,24 @@ class VirtualMachine(object):
         for i in range(num):
             r.insert(0, self.stack.pop())
         self.stack.append(r)
+
+    def MAKE_FUNCTION(self, arg):
+        o = self.stack.pop()
+        self.stack.append(Function(o))
+
+
+    def CALL_FUNCTION(self, arg):
+        logging.debug('call_funciton')
+
+        f = self.stack.pop()
+        frame = self.make_frame(f.func_code)
+        self.push_frame(frame)
+        r = self.run_frame(frame)
+        self.stack.append(r)
+        self.pop_frame()
+
+    def POP_TOP(self):
+        self.stack.pop()
 
 
 if __name__ == '__main__':
@@ -204,10 +271,12 @@ if __name__ == '__main__':
         def tearDown(self):
             change_stdout_to()
             tmpfile.clear()
+            self.vm._reset()
             
 
         def test_get_exec_and_parse_argnment(self):
             o = compile('x = 5', '', 'exec')
+            self.vm.run_code(o)
             what = self.vm._get_exec(o)
             self.assertEqual(what['names'], ('x',))
             self.assertEqual(what['constants'],(5, None))
@@ -236,7 +305,7 @@ if __name__ == '__main__':
             o = compile('4+7+9', '', 'single')
             r = self.vm.run_code(o)
             self.assertEqual(r, None)
-            self.assertEqual(tmpfile, '20\n')
+            self.assertEqual(tmpfile.s, '20\n')
 
 
         def test_variable_and_BINARY_ADD(self):
@@ -262,6 +331,7 @@ if __name__ == '__main__':
                     return 6
             r = self.vm.run_code(f.func_code)
             self.assertEqual(r, 6)
+            self.vm._reset()
             r = self.vm.run_code(g.func_code)
             self.assertEqual(r, 6)
 
@@ -278,5 +348,30 @@ if __name__ == '__main__':
 
             r = self.vm.run_code(o)
             self.assertEqual(tmpfile.s, '1\n3\n6\n')
+
+        def test_function_call(self):
+            s = '''
+def f():
+    return 4 + 8
+r = f()
+'''
+            o = compile(s, '', 'exec')
+            r = self.vm.run_code(o)
+            self.assertTrue(isinstance(self.vm.env['f'], Function))
+            self.assertEqual(self.vm.env['r'], 12)
+
+        def test_function_call2(self):
+            s = '''\
+x = 1
+def f():
+    x = x + 1
+for i in [1,2,3]:
+    f()
+'''
+            o = compile(s, '', 'exec')
+            r = self.vm.run_code(o)
+            self.assertEqual(self.vm.env['x'], 4)
+
+                
      
     unittest.main()
