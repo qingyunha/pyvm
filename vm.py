@@ -1,4 +1,4 @@
-import dis
+import dis, inspect
 import sys
 import logging
 
@@ -20,14 +20,26 @@ class Frame(object):
         self.last_instr = 0
         self.running = True
 
+    def update_env(self, env):
+        self.env.update(env)
+
 class Function(object):
-    def __init__(self, code):
+    def __init__(self, code, defaults, vm):
         self.func_code = code
+        self.func_defaults = defaults
+        self._vm = vm
+
+    def getcallargs(self, *posarg, **keyargs):
+        args = inspect.getargs(self.func_code).args
+        return dict(zip(args, posarg))
+        
 
 #nil = object()
 class nil(object):
     pass
 
+
+## now only a environment for all function 
 class VirtualMachine(object):
     
     HAVE_ARGUMENT = 90
@@ -43,14 +55,15 @@ class VirtualMachine(object):
         self.frames = []
         self.frame = None
 
+
     def run_code(self, code):
         frame = self.make_frame(code)
-        self.push_frame(frame)
-        return self.run_frame(self.frame)
+        return self.run_frame(frame)
 
 
 
     def run_frame(self, frame):
+        self.push_frame(frame)
         what_to_exec = self._get_exec(frame.code_obj)
         instructions = what_to_exec['instructions']
 
@@ -69,6 +82,7 @@ class VirtualMachine(object):
             else:
                 frame.last_instr += 1
 
+        self.pop_frame()
         return r
 
 
@@ -113,7 +127,7 @@ class VirtualMachine(object):
             return arg
 
     def make_frame(self, code):
-        return  Frame(code, self.frame)
+        return  Frame(code, self.frame, self.env)
 
     def push_frame(self, frame):
         logging.debug('push frame')
@@ -124,6 +138,36 @@ class VirtualMachine(object):
         logging.debug('pop frame')
         self.frame = self.frames.pop()
 
+    def pop(self, i=0):
+        """Pop a value from the stack.
+
+        Default to the top of the stack, but `i` can be a count from the top
+        instead.
+
+        """
+        return self.stack.pop(-1-i)
+
+    def push(self, *vals):
+        """Push values onto the value stack."""
+        self.stack.extend(vals)
+
+    def popn(self, n):
+        """Pop a number of values from the value stack.
+
+        A list of `n` values is returned, the deepest value first.
+
+        """
+        if n:
+            ret = self.stack[-n:]
+            self.stack[-n:] = []
+            return ret
+        else:
+            return []
+
+    def peek(self, n):
+        """Get a value `n` entries down in the stack, without changing the stack."""
+        return self.stack[-n]
+    
     ### byte instructions
     def LOAD_CONST(self, const):
         self.stack.append(const)
@@ -215,19 +259,28 @@ class VirtualMachine(object):
         self.stack.append(r)
 
     def MAKE_FUNCTION(self, arg):
-        o = self.stack.pop()
-        self.stack.append(Function(o))
+        code_obj = self.pop()
+        defaults = self.popn(arg)
+        self.push(Function(code_obj, defaults, self))
 
 
-    def CALL_FUNCTION(self, arg):
+    def CALL_FUNCTION(self, argc):
         logging.debug('call_funciton')
-
-        f = self.stack.pop()
-        frame = self.make_frame(f.func_code)
-        self.push_frame(frame)
+        namedargs = {}
+        posargs = []
+        if argc:
+            kwlen, poslen = divmod(argc, 256)
+            logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
+            for i in range(kwlen):
+                key, val = self.popn(2)
+                namedargs[key] = val
+            posargs = self.popn(poslen)
+        func = self.pop()
+        callargs = func.getcallargs(*posargs, **namedargs)
+        frame = self.make_frame(func.func_code)
+        frame.update_env(callargs)
         r = self.run_frame(frame)
-        self.stack.append(r)
-        self.pop_frame()
+        self.push(r)
 
     def POP_TOP(self):
         self.stack.pop()
@@ -276,7 +329,7 @@ if __name__ == '__main__':
 
         def test_get_exec_and_parse_argnment(self):
             o = compile('x = 5', '', 'exec')
-            self.vm.run_code(o)
+            self.vm.frame = self.vm.make_frame(o)
             what = self.vm._get_exec(o)
             self.assertEqual(what['names'], ('x',))
             self.assertEqual(what['constants'],(5, None))
@@ -350,7 +403,7 @@ if __name__ == '__main__':
             self.assertEqual(tmpfile.s, '1\n3\n6\n')
 
         def test_function_call(self):
-            s = '''
+            s = '''\
 def f():
     return 4 + 8
 r = f()
@@ -359,6 +412,7 @@ r = f()
             r = self.vm.run_code(o)
             self.assertTrue(isinstance(self.vm.env['f'], Function))
             self.assertEqual(self.vm.env['r'], 12)
+
 
         def test_function_call2(self):
             s = '''\
@@ -372,6 +426,18 @@ for i in [1,2,3]:
             r = self.vm.run_code(o)
             self.assertEqual(self.vm.env['x'], 4)
 
+        
+        def test_function_call_with_arg(self):
+            s = '''\
+def f(x, y):
+    return x + y
+
+r = f(1, 2)
+'''
+            o = compile(s, '', 'exec')
+            r = self.vm.run_code(o)
+            self.assertEqual(self.vm.env['r'], 3)
+            
                 
      
     unittest.main()
