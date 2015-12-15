@@ -1,10 +1,10 @@
-import dis, inspect
+import dis, inspect, types
 import sys
 import logging
 
-#LOGGING_LEVEL=logging.DEBUG
+LOGGING_LEVEL=logging.DEBUG
 LOGGING_LEVEL=logging.ERROR
-logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
+#logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
 
 class Frame(object):
     def __init__(self, code_obj, prev_frame, env=None):
@@ -28,11 +28,9 @@ class Function(object):
         self.func_code = code
         self.func_defaults = defaults
         self._vm = vm
+        self._func = types.FunctionType(code, vm.env, 
+                                              argdefs=tuple(defaults))
 
-    def getcallargs(self, *posarg, **keyargs):
-        args = inspect.getargs(self.func_code).args
-        return dict(zip(args, posarg))
-        
 
 #nil = object()
 class nil(object):
@@ -102,7 +100,7 @@ class VirtualMachine(object):
             byte_code = byte_codes[i]
             name = dis.opname[byte_code]
             if byte_code >= self.HAVE_ARGUMENT:
-                arg = (byte_codes[i+2] >> 8) + byte_codes[i+1]
+                arg = (byte_codes[i+2] << 8) + byte_codes[i+1]
                 i += 2
             else:
                 arg = None
@@ -276,7 +274,7 @@ class VirtualMachine(object):
                 namedargs[key] = val
             posargs = self.popn(poslen)
         func = self.pop()
-        callargs = func.getcallargs(*posargs, **namedargs)
+        callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
         frame = self.make_frame(func.func_code)
         frame.update_env(callargs)
         r = self.run_frame(frame)
@@ -403,7 +401,8 @@ if __name__ == '__main__':
             self.assertEqual(tmpfile.s, '1\n3\n6\n')
 
         def test_function_call(self):
-            s = '''\
+            s = \
+'''
 def f():
     return 4 + 8
 r = f()
@@ -415,7 +414,8 @@ r = f()
 
 
         def test_function_call2(self):
-            s = '''\
+            s = \
+'''
 x = 1
 def f():
     x = x + 1
@@ -428,7 +428,8 @@ for i in [1,2,3]:
 
         
         def test_function_call_with_arg(self):
-            s = '''\
+            s = \
+'''
 def f(x, y):
     return x + y
 
@@ -437,6 +438,36 @@ r = f(1, 2)
             o = compile(s, '', 'exec')
             r = self.vm.run_code(o)
             self.assertEqual(self.vm.env['r'], 3)
+
+
+        def test_function_call_with_arg2(self):
+            s = \
+'''
+def f(x, *args, **kwargs):
+    pass
+
+f(0, 1, 2, 3, test='yes')
+'''
+            o = compile(s, '', 'exec')
+            r = self.vm.run_code(o)
+            self.assertEqual(self.vm.env['x'], 0)
+            self.assertEqual(self.vm.env['args'], (1,2,3))
+            self.assertEqual(self.vm.env['kwargs'], {'test': 'yes'})
+            
+
+        def test_function_call_with_default_arg(self):
+            s = \
+'''
+def f(x, y=1, z=2):
+    pass
+f(0)
+f(0, z=9)
+'''
+            o = compile(s, '', 'exec')
+            r = self.vm.run_code(o)
+            self.assertEqual(self.vm.env['x'], 0)
+            self.assertEqual(self.vm.env['y'], 1)
+            self.assertEqual(self.vm.env['z'], 9)
             
                 
      
