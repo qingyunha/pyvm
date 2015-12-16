@@ -4,31 +4,28 @@ import logging
 
 LOGGING_LEVEL=logging.DEBUG
 LOGGING_LEVEL=logging.ERROR
-#logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
+logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
 
 class Frame(object):
-    def __init__(self, code_obj, prev_frame, env=None):
-        self.code_obj = code_obj
-        self.prev_frame = prev_frame
-        if env:
-            self.env = env 
-        elif prev_frame:
-            self.env = prev_frame.env
-        else:
-            self.env = {} 
+    def __init__(self, f_code, f_globals, f_locals, f_back):
+        self.f_code = f_code
+        self.f_globals = f_globals
+        self.f_locals = f_locals
+        self.f_back = f_back
+        self.f_builtins = __builtins__.__dict__ 
         self.stack = []
         self.last_instr = 0
         self.running = True
 
     def update_env(self, env):
-        self.env.update(env)
+        self.f_locals.update(env)
 
 class Function(object):
     def __init__(self, code, defaults, vm):
         self.func_code = code
         self.func_defaults = defaults
         self._vm = vm
-        self._func = types.FunctionType(code, vm.env, 
+        self._func = types.FunctionType(code, vm.frame.f_globals, 
                                               argdefs=tuple(defaults))
 
 
@@ -47,7 +44,6 @@ class VirtualMachine(object):
 
     def _reset(self):
         self.stack = []
-        self.env = {}
         self.jump = False
         self.result = None
         self.frames = []
@@ -62,7 +58,7 @@ class VirtualMachine(object):
 
     def run_frame(self, frame):
         self.push_frame(frame)
-        what_to_exec = self._get_exec(frame.code_obj)
+        what_to_exec = self._get_exec(frame.f_code)
         instructions = what_to_exec['instructions']
 
         while frame.last_instr < len(instructions) and frame.running:
@@ -124,8 +120,24 @@ class VirtualMachine(object):
         else:
             return arg
 
-    def make_frame(self, code):
-        return  Frame(code, self.frame, self.env)
+    def make_frame(self, code, callargs={}, f_globals=None, f_locals=None):
+        if f_globals is not None:
+            f_globals = f_globals
+            if f_locals is None:
+                f_locals = f_globals
+        elif self.frames:
+            f_globals = self.frame.f_globals
+            self.local_env = f_locals = {}
+        else:
+            self.env = f_globals = f_locals = {
+                '__builtins__': __builtins__,
+                '__name__': '__main__',
+                '__doc__': None,
+                '__package__': None,
+            }
+        f_locals.update(callargs)
+        frame = Frame(code, f_globals, f_locals, self.frame)
+        return frame
 
     def push_frame(self, frame):
         logging.debug('push frame')
@@ -168,29 +180,53 @@ class VirtualMachine(object):
     
     ### byte instructions
     def LOAD_CONST(self, const):
-        self.stack.append(const)
+        self.push(const)
 
     def LOAD_NAME(self, name):
-        val = self.env[name]
-        self.stack.append(val)
+        frame = self.frame
+        if name in frame.f_locals:
+            val = frame.f_locals[name]
+        elif name in frame.f_globals:
+            val = frame.f_globals[name]
+        elif name in frame.f_builtins:
+            val = frame.f_builtins[name]
+        else:
+            raise NameError("name '%s' is not defined" % name)
+        self.push(val)
+        
 
     def STORE_NAME(self, name):
-        val = self.stack.pop()
-        self.env[name] = val
-    
+        self.frame.f_locals[name] = self.pop()
+
     def LOAD_FAST(self, name):
-        name = self.frame.code_obj.co_varnames[name]
-        val = self.env[name]
-        self.stack.append(val)
+        name = self.frame.f_code.co_varnames[name]
+        if name in self.frame.f_locals:
+            val = self.frame.f_locals[name]
+        else:
+            raise UnboundLocalError(
+                "local variable '%s' referenced before assignment" % name
+            )
+        self.push(val)
+        
 
     def STORE_FAST(self, name):
-        name = self.frame.code_obj.co_varnames[name]
-        val = self.stack.pop()
-        self.env[name] = val
+        name = self.frame.f_code.co_varnames[name]
+        self.frame.f_locals[name] = self.pop()
 
     def LOAD_GLOBAL(self, name):
-        val = self.env[name]
-        self.stack.append(val)
+        f = self.frame
+        if name in f.f_globals:
+            val = f.f_globals[name]
+        elif name in f.f_builtins:
+            val = f.f_builtins[name]
+        else:
+            raise NameError("global name '%s' is not defined" % name)
+        self.push(val)
+
+    def STORE_GLOBAL(self, name):
+        self.frame.f_globals[name] = self.pop()
+
+        
 
     def BINARY_ADD(self):
         v1 = self.stack.pop()
@@ -274,9 +310,13 @@ class VirtualMachine(object):
                 namedargs[key] = val
             posargs = self.popn(poslen)
         func = self.pop()
-        callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
-        frame = self.make_frame(func.func_code)
-        frame.update_env(callargs)
+        if isinstance(func, Function):
+            callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
+        else:
+            r = func(*posargs, **namedargs)
+            self.push(r)
+            return
+        frame = self.make_frame(func.func_code,callargs)
         r = self.run_frame(frame)
         self.push(r)
 
@@ -418,6 +458,7 @@ r = f()
 '''
 x = 1
 def f():
+    global x
     x = x + 1
 for i in [1,2,3]:
     f()
@@ -450,9 +491,9 @@ f(0, 1, 2, 3, test='yes')
 '''
             o = compile(s, '', 'exec')
             r = self.vm.run_code(o)
-            self.assertEqual(self.vm.env['x'], 0)
-            self.assertEqual(self.vm.env['args'], (1,2,3))
-            self.assertEqual(self.vm.env['kwargs'], {'test': 'yes'})
+            self.assertEqual(self.vm.local_env['x'], 0)
+            self.assertEqual(self.vm.local_env['args'], (1,2,3))
+            self.assertEqual(self.vm.local_env['kwargs'], {'test': 'yes'})
             
 
         def test_function_call_with_default_arg(self):
@@ -465,10 +506,13 @@ f(0, z=9)
 '''
             o = compile(s, '', 'exec')
             r = self.vm.run_code(o)
-            self.assertEqual(self.vm.env['x'], 0)
-            self.assertEqual(self.vm.env['y'], 1)
-            self.assertEqual(self.vm.env['z'], 9)
+            self.assertEqual(self.vm.local_env['x'], 0)
+            self.assertEqual(self.vm.local_env['y'], 1)
+            self.assertEqual(self.vm.local_env['z'], 9)
+
+        def test_builtin_function(self):
+            o = compile('r = len([1,2,3])', '', 'single')
+            r = self.vm.run_code(o)
+            self.assertEqual(self.vm.env['r'], 3)
             
-                
-     
     unittest.main()
