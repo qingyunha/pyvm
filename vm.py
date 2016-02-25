@@ -12,7 +12,10 @@ class Frame(object):
         self.f_globals = f_globals
         self.f_locals = f_locals
         self.f_back = f_back
-        self.f_builtins = __builtins__.__dict__ 
+        if hasattr(__builtins__, '__dict__'):
+            self.f_builtins = __builtins__.__dict__ 
+        else:
+            self.f_builtins = __builtins__
         self.stack = []
         self.last_instr = 0
         self.running = True
@@ -231,7 +234,7 @@ class VirtualMachine(object):
     def BINARY_ADD(self):
         v1 = self.stack.pop()
         v2 = self.stack.pop()
-        self.stack.append(v1 + v2)
+        self.stack.append(v2 + v1)
 
     def PRINT_EXPR(self):
         print self.stack.pop()
