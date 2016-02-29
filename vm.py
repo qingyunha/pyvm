@@ -19,6 +19,9 @@ class Frame(object):
         self.stack = []
         self.last_instr = 0
         self.running = True
+        
+        #refactor
+        self.f_lasti = 0
 
     def update_env(self, env):
         self.f_locals.update(env)
@@ -53,35 +56,94 @@ class VirtualMachine(object):
         self.frame = None
 
 
+        #refactor
+        self.return_value = None
+        self.last_exception = None
+
+
     def run_code(self, code):
         frame = self.make_frame(code)
-        return self.run_frame(frame)
+        val = self.run_frame(frame)
+        # Check some invariants
+        if self.frames:            # pragma: no cover
+            raise VirtualMachineError("Frames left over!")
+        if self.frame and self.frame.stack:             # pragma: no cover
+            raise VirtualMachineError("Data left on stack! %r" % self.frame.stack)
+
+        return val
 
 
 
     def run_frame(self, frame):
         self.push_frame(frame)
-        what_to_exec = self._get_exec(frame.f_code)
-        instructions = what_to_exec['instructions']
-
-        while frame.last_instr < len(instructions) and frame.running:
-            instr, arg = instructions[frame.last_instr]
-            vm_instr = getattr(self, instr)
-            vm_arg = self._parse_argument(instr, arg, what_to_exec)
-            logging.debug(instr + '  ' + str(vm_arg))
-            if vm_arg is nil:
-                r = vm_instr()
-            else:
-                r = vm_instr(vm_arg)
-
-            if self.jump:
-                self.jump = False
-            else:
-                frame.last_instr += 1
+        while True:
+            byteName, arguments, opoffset = self.parse_byte()
+            why = self.dispatch(byteName, arguments)
+            if why:
+                break
 
         self.pop_frame()
-        return r
 
+        if why == 'exception':
+            print>>sys.stderr, self.last_exception
+            raise(self.last_exception)
+
+        return self.return_value
+
+    def parse_byte(self):
+        f = self.frame
+        opoffset = f.f_lasti
+        byteCode = ord(f.f_code.co_code[opoffset])
+        f.f_lasti += 1
+        byteName = dis.opname[byteCode]
+        arg = None
+        arguments = []
+        if byteCode >= dis.HAVE_ARGUMENT:
+            arg = f.f_code.co_code[f.f_lasti:f.f_lasti+2]
+            f.f_lasti += 2
+            intArg = ord(arg[0]) + (ord(arg[1]) << 8)
+            if byteCode in dis.hasconst:
+                arg = f.f_code.co_consts[intArg]
+            elif byteCode in dis.hasfree:
+                if intArg < len(f.f_code.co_cellvars):
+                    arg = f.f_code.co_cellvars[intArg]
+                else:
+                    var_idx = intArg - len(f.f_code.co_cellvars)
+                    arg = f.f_code.co_freevars[var_idx]
+            elif byteCode in dis.hasname:
+                arg = f.f_code.co_names[intArg]
+            elif byteCode in dis.hasjrel:
+                arg = f.f_lasti + intArg
+            elif byteCode in dis.hasjabs:
+                arg = intArg
+            elif byteCode in dis.haslocal:
+                arg = f.f_code.co_varnames[intArg]
+            else:
+                arg = intArg
+            arguments = [arg]
+
+        return byteName, arguments, opoffset
+
+
+    def dispatch(self, byteName, arguments):
+        """ Dispatch by bytename to the corresponding methods.
+        Exceptions are caught and set on the virtual machine."""
+        why = None
+        #try:
+        bytecode_fn = getattr(self,  byteName, None)
+        if not bytecode_fn:            # pragma: no cover
+            raise VirtualMachineError(
+                "unknown bytecode type: %s" % byteName
+            )
+        why = bytecode_fn(*arguments)
+
+        #except:
+            # deal with exceptions encountered while executing the op.
+            #self.last_exception = sys.exc_info()[:2] + (None,)
+            #log.exception("Caught exception during execution")
+            #why = 'exception'
+
+        return why
 
     def _get_exec(self, code):
         self.frame.byte_to_instr = {}
@@ -202,7 +264,7 @@ class VirtualMachine(object):
         self.frame.f_locals[name] = self.pop()
 
     def LOAD_FAST(self, name):
-        name = self.frame.f_code.co_varnames[name]
+        #name = self.frame.f_code.co_varnames[name]
         if name in self.frame.f_locals:
             val = self.frame.f_locals[name]
         else:
@@ -247,7 +309,8 @@ class VirtualMachine(object):
 
     def RETURN_VALUE(self):
         self.frame.running = False
-        return self.stack.pop()
+        self.return_value =  self.stack.pop()
+        return 'return'
 
     def COMPARE_OP(self, arg):
         v1 = self.stack.pop()
@@ -258,16 +321,13 @@ class VirtualMachine(object):
     def POP_JUMP_IF_FALSE(self, target):
         v = self.stack.pop()
         if v:
-            self.frame.last_instr = self.frame.byte_to_instr[target] 
-            self.jump = True
+            self.frame.f_lasti = target 
         
     def JUMP_FORWARD(self, step):
-        self.frame.last_instr = self.last_to_instr + step - 1
-        self.jump = True
+        self.frame.f_lasti = step 
 
     def JUMP_ABSOLUTE(self, target):
-        self.frame.last_instr = self.frame.byte_to_instr[target]
-        self.jump = True
+        self.frame.f_lasti = target 
 
     def GET_ITER(self):
         v = self.stack.pop()
@@ -279,8 +339,7 @@ class VirtualMachine(object):
             self.stack.append(v.next())
         except StopIteration:
             self.stack.pop()
-            target = self.frame.instr_to_byte[self.frame.last_instr] + step
-            self.frame.last_instr = self.frame.byte_to_instr[target]
+            self.frame.f_lasti = step
 
     def SETUP_LOOP(self, arg):
         pass
@@ -517,5 +576,7 @@ f(0, z=9)
             o = compile('r = len([1,2,3])', '', 'single')
             r = self.vm.run_code(o)
             self.assertEqual(self.vm.env['r'], 3)
+
+
             
     unittest.main()
