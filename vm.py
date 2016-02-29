@@ -1,10 +1,13 @@
 import dis, inspect, types
-import sys
+import sys, re
 import logging
 
 LOGGING_LEVEL=logging.DEBUG
 LOGGING_LEVEL=logging.ERROR
 logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
+
+class VirtualMachineError(Exception):
+    pass
 
 class Frame(object):
     def __init__(self, f_code, f_globals, f_locals, f_back):
@@ -128,6 +131,9 @@ class VirtualMachine(object):
     def dispatch(self, byteName, arguments):
         """ Dispatch by bytename to the corresponding methods.
         Exceptions are caught and set on the virtual machine."""
+        sys.stderr.write(byteName + '\n')
+
+        byteName = byteName.replace('+','')
         why = None
         #try:
         bytecode_fn = getattr(self,  byteName, None)
@@ -313,15 +319,20 @@ class VirtualMachine(object):
         return 'return'
 
     def COMPARE_OP(self, arg):
-        v1 = self.stack.pop()
-        v2 = self.stack.pop()
+        v1, v2 = self.popn(2)
         s = repr(v1) + dis.cmp_op[arg] + repr(v2)
-        self.stack.append(eval(s))
+        self.push(eval(s))
+
+    def POP_JUMP_IF_TRUE(self, target):
+        v = self.pop()
+        if  v:
+            self.frame.f_lasti = target 
 
     def POP_JUMP_IF_FALSE(self, target):
-        v = self.stack.pop()
-        if v:
+        v = self.pop()
+        if not v:
             self.frame.f_lasti = target 
+
         
     def JUMP_FORWARD(self, step):
         self.frame.f_lasti = step 
@@ -385,6 +396,146 @@ class VirtualMachine(object):
     def POP_TOP(self):
         self.stack.pop()
 
+    #refactor
+    def UNPACK_SEQUENCE(self, count):
+        seq = self.pop()
+        for val in reversed(seq):
+            self.push(val)
+
+    #inplace operation
+    def INPLACE_POWER(self):
+        v1, v = self.popn(2)
+        self.push(v1 ** v)
+
+    def INPLACE_ADD(self):
+        v1, v = self.popn(2)
+        self.push(v1 + v)
+
+    def INPLACE_MULTIPLY(self):
+        v1, v = self.popn(2)
+        self.push(v1 * v)
+
+    
+    def INPLACE_DIVIDE(self):
+        v1, v = self.popn(2)
+        self.push(v1 / v)
+
+    def INPLACE_FLOOR_DIVIDE(self):
+        v1, v = self.popn(2)
+        self.push(v1 // v)
+
+    def INPLACE_MODULO(self):
+        v1, v = self.popn(2)
+        self.push(v1 % v)
+
+    def INPLACE_SUBTRACT(self):
+        v1, v = self.popn(2)
+        self.push(v1 - v)
+
+    def INPLACE_LSHIFT(self):
+        v1, v = self.popn(2)
+        self.push(v1 << v)
+
+    def INPLACE_RSHIFT(self):
+        v1, v = self.popn(2)
+        self.push(v1 >> v)
+
+    def INPLACE_AND(self):
+        v1, v = self.popn(2)
+        self.push(v1 & v)
+
+    def INPLACE_XOR(self):
+        v1, v = self.popn(2)
+        self.push(v1 ^ v)
+
+    def INPLACE_OR(self):
+        v1, v = self.popn(2)
+        self.push(v1 | v)
+
+
+
+    #slice operation
+    def SLICE3(self):
+        l, r = self.popn(2)
+        v = self.pop()
+        self.push(v[l:r])
+
+    def SLICE2(self):
+        end = self.pop()
+        v = self.pop()
+        self.push(v[:end])
+
+    def SLICE1(self):
+        start = self.pop()
+        v = self.pop()
+        self.push(v[start:])
+
+    def SLICE0(self):
+        v = self.pop()
+        self.push(v[:])
+
+    def STORE_SLICE3(self):
+        start, end = self.popn(2)
+        l = self.pop()
+        v = self.pop()
+        l[start:end] = v
+
+    def STORE_SLICE2(self):
+        end = self.pop()
+        l = self.pop()
+        v = self.pop()
+        l[:end] = v
+
+    def STORE_SLICE1(self):
+        start = self.pop()
+        l = self.pop()
+        v = self.pop()
+        l[start:] = v
+
+    def STORE_SLICE0(self):
+        l = self.pop()
+        v = self.pop()
+        l[:] = v
+
+    def BUILD_SLICE(self, argc):
+        step = None
+        if argc == 2:
+            start, stop = self.popn(2)
+        else:
+            start, stop, step = self.popn(3)
+        self.push(slice(start, stop, step))
+
+    def BINARY_SUBSCR(self):
+        v, s = self.popn(2)
+        self.push(v[s])
+
+    def RAISE_VARARGS(self, argc):
+        # NOTE: the dis docs are completely wrong about the order of the
+        # operands on the stack!
+        exctype = val = tb = None
+        if argc == 0:
+            exctype, val, tb = self.last_exception
+        elif argc == 1:
+            exctype = self.pop()
+        elif argc == 2:
+            val = self.pop()
+            exctype = self.pop()
+        elif argc == 3:
+            tb = self.pop()
+            val = self.pop()
+            exctype = self.pop()
+
+        # There are a number of forms of "raise", normalize them somewhat.
+        if isinstance(exctype, BaseException):
+            val = exctype
+            exctype = type(val)
+
+        self.last_exception = (exctype, val, tb)
+
+        if tb:
+            return 'reraise'
+        else:
+            return 'exception'
 
 if __name__ == '__main__':
     import unittest
@@ -494,6 +645,17 @@ if __name__ == '__main__':
 
             r = self.vm.run_code(f.func_code)
             self.assertEqual(r, [1,2,3])
+
+
+        def test_inplace_add(self):
+            s = 'x,y=3,4\nx += y\nassert x == 7'
+            o = compile(s, '', 'exec')
+
+            self.vm.run_code(o)
+            
+            self.assertEqual(self.vm.env['y'], 4)
+            self.assertEqual(self.vm.env['x'], 7)
+
 
         def test_for_loop(self):
             s = 'x=0\nfor i in [1,2,3]:\n\tx = x + i\n\tprint x'
