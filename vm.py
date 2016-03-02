@@ -294,15 +294,31 @@ class VirtualMachine(object):
             raise NameError("global name '%s' is not defined" % name)
         self.push(val)
 
+   
     def STORE_GLOBAL(self, name):
         self.frame.f_globals[name] = self.pop()
 
-        
+    def LOAD_ATTR(self, name):
+        target = self.pop()
+        val = getattr(target, name)
+        self.push(val)
+
+    def STORE_ATTR(self, name):
+        val, target = self.popn(2)
+        setattr(target, name, val) 
+
+    def DELETE_ATTR(self, name):
+        target = self.pop()
+        delattr(target, name) 
 
     def BINARY_ADD(self):
         v1 = self.stack.pop()
         v2 = self.stack.pop()
         self.stack.append(v2 + v1)
+
+    def BINARY_MULTIPLY(self):
+        v1, v2 = self.popn(2)
+        self.push(v2 * v1)
 
     def PRINT_EXPR(self):
         print self.stack.pop()
@@ -365,6 +381,26 @@ class VirtualMachine(object):
             r.insert(0, self.stack.pop())
         self.stack.append(r)
 
+    def BUILD_TUPLE(self, num):
+        t = self.popn(num)
+        self.push(tuple(t))
+
+
+    def BUILD_MAP(self, size):
+        self.push({})
+
+    def STORE_MAP(self):
+        val, key = self.popn(2)
+        m = self.peek(1)
+        m[key] = val
+
+
+    def LIST_APPEND(self, count):
+        val = self.pop()
+        l = self.peek(count)
+        l.append(val)
+
+
     def MAKE_FUNCTION(self, arg):
         code_obj = self.pop()
         defaults = self.popn(arg)
@@ -374,7 +410,7 @@ class VirtualMachine(object):
     def CALL_FUNCTION(self, argc):
         logging.debug('call_funciton')
         namedargs = {}
-        posargs = []
+        posargs = None
         if argc:
             kwlen, poslen = divmod(argc, 256)
             logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
@@ -497,6 +533,25 @@ class VirtualMachine(object):
         v = self.pop()
         l[:] = v
 
+    def DELETE_SLICE3(self):
+        start, end = self.popn(2)
+        l = self.pop()
+        del l[start:end] 
+
+    def DELETE_SLICE2(self):
+        end = self.pop()
+        l = self.pop()
+        del l[:end] 
+
+    def DELETE_SLICE1(self):
+        start = self.pop()
+        l = self.pop()
+        del l[start:] 
+
+    def DELETE_SLICE0(self):
+        l = self.pop()
+        del l[:] 
+
     def BUILD_SLICE(self, argc):
         step = None
         if argc == 2:
@@ -505,9 +560,31 @@ class VirtualMachine(object):
             start, stop, step = self.popn(3)
         self.push(slice(start, stop, step))
 
+    def UNARY_NEGATIVE(self):
+        self.push(-self.pop())
+
+    def UNARY_INVERT(self):
+        self.push(~self.pop())
+
+    def UNARY_NOT(self):
+        self.push(not self.pop())
+
+
+    def BINARY_MODULO(self):
+        a, b = self.popn(2)
+        self.push(a % b)
+
     def BINARY_SUBSCR(self):
         v, s = self.popn(2)
         self.push(v[s])
+
+    def STORE_SUBSCR(self):
+        v, s = self.popn(2)
+        v[s] = self.pop() 
+
+    def DELETE_SUBSCR(self):
+        v, s = self.popn(2)
+        del v[s]
 
     def RAISE_VARARGS(self, argc):
         # NOTE: the dis docs are completely wrong about the order of the
