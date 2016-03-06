@@ -37,6 +37,12 @@ class Function(object):
         self._func = types.FunctionType(code, vm.frame.f_globals, 
                                               argdefs=tuple(defaults))
 
+    def __call__(self, *args, **kwargs):
+        callargs = inspect.getcallargs(self._func, *args, **kwargs)
+        frame = self._vm.make_frame(self.func_code,callargs)
+        r = self._vm.run_frame(frame)
+        self._vm.push(r)
+
 
 #nil = object()
 class nil(object):
@@ -50,6 +56,8 @@ class VirtualMachine(object):
 
     def __init__(self):
         self._reset()
+
+        self.table = lambda x : x
 
     def _reset(self):
         self.stack = []
@@ -131,7 +139,7 @@ class VirtualMachine(object):
     def dispatch(self, byteName, arguments):
         """ Dispatch by bytename to the corresponding methods.
         Exceptions are caught and set on the virtual machine."""
-        sys.stderr.write(byteName + '\n')
+        sys.stderr.write(byteName + " " + str(arguments) + '\n')
 
         byteName = byteName.replace('+','')
         why = None
@@ -281,8 +289,10 @@ class VirtualMachine(object):
         
 
     def STORE_FAST(self, name):
-        name = self.frame.f_code.co_varnames[name]
         self.frame.f_locals[name] = self.pop()
+
+    def DELETE_FAST(self, name):
+        del self.frame.f_locals[name]
 
     def LOAD_GLOBAL(self, name):
         f = self.frame
@@ -410,7 +420,7 @@ class VirtualMachine(object):
     def CALL_FUNCTION(self, argc):
         logging.debug('call_funciton')
         namedargs = {}
-        posargs = None
+        posargs = {}
         if argc:
             kwlen, poslen = divmod(argc, 256)
             logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
@@ -420,18 +430,33 @@ class VirtualMachine(object):
             posargs = self.popn(poslen)
         func = self.pop()
         if isinstance(func, Function):
-            callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
+            #callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
+            func(*posargs, **namedargs)
         else:
+            #print func
+            #self.table.local = self.frame.f_locals
+            #self.table.sort = func
+            #self.table.posargs = posargs
+            #self.table.namedargs = namedargs
             r = func(*posargs, **namedargs)
             self.push(r)
-            return
-        frame = self.make_frame(func.func_code,callargs)
-        r = self.run_frame(frame)
-        self.push(r)
+        #frame = self.make_frame(func.func_code,callargs)
+        #r = self.run_frame(frame)
+        #self.push(r)
 
     def POP_TOP(self):
         self.stack.pop()
 
+    def DUP_TOP(self):
+        self.push(self.peek(1))
+
+    def ROT_TWO(self):
+        a, b = self.popn(2)
+        self.push(b, a)
+
+
+    def DELETE_NAME(self, name):
+        del self.frame.f_locals[name]
     #refactor
     def UNPACK_SEQUENCE(self, count):
         seq = self.pop()
