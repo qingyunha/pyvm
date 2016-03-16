@@ -41,8 +41,32 @@ class Function(object):
         callargs = inspect.getcallargs(self._func, *args, **kwargs)
         frame = self._vm.make_frame(self.func_code,callargs)
         r = self._vm.run_frame(frame)
-        self._vm.push(r)
+        return r
 
+    def __get__(self, instance, owner):
+        if instance is not None:
+            return Method(instance, owner, self)
+        return Method(None, owner, self)
+        
+
+class Method(object):
+    def __init__(self, obj, _class, func):
+        self.im_self = obj
+        self.im_class = _class
+        self.im_func = func
+
+    def __repr__(self):         # pragma: no cover
+        name = "%s.%s" % (self.im_class.__name__, self.im_func.func_name)
+        if self.im_self is not None:
+            return '<Bound Method %s of %s>' % (name, self.im_self)
+        else:
+            return '<Unbound Method %s>' % (name,)
+
+    def __call__(self, *args, **kwargs):
+        if self.im_self is not None:
+            return self.im_func(self.im_self, *args, **kwargs)
+        else:
+            return self.im_func(*args, **kwargs)
 
 #nil = object()
 class nil(object):
@@ -321,6 +345,9 @@ class VirtualMachine(object):
         target = self.pop()
         delattr(target, name) 
 
+    def LOAD_LOCALS(self):
+        self.push(self.frame.f_locals)
+
     def BINARY_ADD(self):
         v1 = self.stack.pop()
         v2 = self.stack.pop()
@@ -399,6 +426,11 @@ class VirtualMachine(object):
     def BUILD_MAP(self, size):
         self.push({})
 
+
+    def BUILD_CLASS(self):
+        name, bases, methods = self.popn(3)
+        self.push(type(name, bases, methods))
+
     def STORE_MAP(self):
         val, key = self.popn(2)
         m = self.peek(1)
@@ -414,7 +446,8 @@ class VirtualMachine(object):
     def MAKE_FUNCTION(self, arg):
         code_obj = self.pop()
         defaults = self.popn(arg)
-        self.push(Function(code_obj, defaults, self))
+        fn = Function(code_obj, defaults, self)
+        self.push(fn)
 
 
     def CALL_FUNCTION(self, argc):
@@ -429,20 +462,8 @@ class VirtualMachine(object):
                 namedargs[key] = val
             posargs = self.popn(poslen)
         func = self.pop()
-        if isinstance(func, Function):
-            #callargs = inspect.getcallargs(func._func, *posargs, **namedargs)
-            func(*posargs, **namedargs)
-        else:
-            #print func
-            #self.table.local = self.frame.f_locals
-            #self.table.sort = func
-            #self.table.posargs = posargs
-            #self.table.namedargs = namedargs
-            r = func(*posargs, **namedargs)
-            self.push(r)
-        #frame = self.make_frame(func.func_code,callargs)
-        #r = self.run_frame(frame)
-        #self.push(r)
+        r = func(*posargs, **namedargs)
+        self.push(r)
 
     def POP_TOP(self):
         self.stack.pop()
