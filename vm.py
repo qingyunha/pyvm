@@ -1,6 +1,9 @@
-import dis, inspect, types
+import dis, inspect, types, operator
 import sys, re
 import logging
+import six
+
+CATCH = False
 
 LOGGING_LEVEL=logging.DEBUG
 LOGGING_LEVEL=logging.ERROR
@@ -32,6 +35,7 @@ class Frame(object):
 class Function(object):
     def __init__(self, code, defaults, vm):
         self.func_code = code
+        self.func_name = self.__name__ = code.co_name
         self.func_defaults = defaults
         self._vm = vm
         self._func = types.FunctionType(code, vm.frame.f_globals, 
@@ -121,7 +125,7 @@ class VirtualMachine(object):
 
         if why == 'exception':
             print>>sys.stderr, self.last_exception
-            raise(self.last_exception)
+            six.reraise(*self.last_exception)
 
         return self.return_value
 
@@ -163,23 +167,30 @@ class VirtualMachine(object):
     def dispatch(self, byteName, arguments):
         """ Dispatch by bytename to the corresponding methods.
         Exceptions are caught and set on the virtual machine."""
-        sys.stderr.write(byteName + " " + str(arguments) + '\n')
+        #sys.stderr.write(byteName + " " + str(arguments) + '\n')
 
         byteName = byteName.replace('+','')
         why = None
-        #try:
-        bytecode_fn = getattr(self,  byteName, None)
-        if not bytecode_fn:            # pragma: no cover
-            raise VirtualMachineError(
-                "unknown bytecode type: %s" % byteName
-            )
-        why = bytecode_fn(*arguments)
-
-        #except:
-            # deal with exceptions encountered while executing the op.
-            #self.last_exception = sys.exc_info()[:2] + (None,)
-            #log.exception("Caught exception during execution")
-            #why = 'exception'
+        if CATCH:
+            try:
+                bytecode_fn = getattr(self,  byteName, None)
+                if not bytecode_fn:            # pragma: no cover
+                    raise VirtualMachineError(
+                        "unknown bytecode type: %s" % byteName
+                    )
+                why = bytecode_fn(*arguments)
+            except:
+                # deal with exceptions encountered while executing the op.
+                self.last_exception = sys.exc_info()[:2] + (None,)
+                #log.exception("Caught exception during execution")
+                why = 'exception'
+        else:
+            bytecode_fn = getattr(self,  byteName, None)
+            if not bytecode_fn:            # pragma: no cover
+                raise VirtualMachineError(
+                    "unknown bytecode type: %s" % byteName
+                )
+            why = bytecode_fn(*arguments)
 
         return why
 
@@ -371,10 +382,23 @@ class VirtualMachine(object):
         self.return_value =  self.stack.pop()
         return 'return'
 
-    def COMPARE_OP(self, arg):
-        v1, v2 = self.popn(2)
-        s = repr(v1) + dis.cmp_op[arg] + repr(v2)
-        self.push(eval(s))
+    COMPARE_OPERATORS = [
+        operator.lt,
+        operator.le,
+        operator.eq,
+        operator.ne,
+        operator.gt,
+        operator.ge,
+        lambda x, y: x in y,
+        lambda x, y: x not in y,
+        lambda x, y: x is y,
+        lambda x, y: x is not y,
+        lambda x, y: issubclass(x, Exception) and issubclass(x, y),
+    ]
+
+    def COMPARE_OP(self, opnum):
+        x, y = self.popn(2)
+        self.push(self.COMPARE_OPERATORS[opnum](x, y))
 
     def POP_JUMP_IF_TRUE(self, target):
         v = self.pop()
@@ -392,6 +416,22 @@ class VirtualMachine(object):
 
     def JUMP_ABSOLUTE(self, target):
         self.frame.f_lasti = target 
+
+
+    def JUMP_IF_TRUE_OR_POP(self, jump):
+        val = self.peek(1)
+        if val:
+            self.frame.f_lasti = jump
+        else:
+            self.pop()
+
+    def JUMP_IF_FALSE_OR_POP(self, jump):
+        val = self.peek(1)
+        if not val:
+            self.frame.f_lasti = jump 
+        else:
+            self.pop()
+
 
     def GET_ITER(self):
         v = self.stack.pop()
@@ -453,7 +493,7 @@ class VirtualMachine(object):
     def CALL_FUNCTION(self, argc):
         logging.debug('call_funciton')
         namedargs = {}
-        posargs = {}
+        posargs = [] 
         if argc:
             kwlen, poslen = divmod(argc, 256)
             logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
@@ -462,8 +502,47 @@ class VirtualMachine(object):
                 namedargs[key] = val
             posargs = self.popn(poslen)
         func = self.pop()
+        if hasattr(func, 'im_func'):
+            # Methods get self as an implicit first parameter.
+            if func.im_self:
+                posargs.insert(0, func.im_self)
+            # The first parameter must be the correct type.
+            if not isinstance(posargs[0], func.im_class):
+                raise TypeError(
+                    'unbound method %s() must be called with %s instance '
+                    'as first argument (got %s instance instead)' % (
+                        func.im_func.func_name,
+                        func.im_class.__name__,
+                        type(posargs[0]).__name__,
+                    )
+                )
+            func = func.im_func
         r = func(*posargs, **namedargs)
         self.push(r)
+
+    def EXEC_STMT(self):
+        stmt, globs, locs = self.popn(3)
+        exec(stmt, globs, locs)
+    ## Importing
+
+    def IMPORT_NAME(self, name):
+        level, fromlist = self.popn(2)
+        frame = self.frame
+        self.push(
+            __import__(name, frame.f_globals, frame.f_locals, fromlist, level)
+        )
+
+    def IMPORT_STAR(self):
+        # TODO: this doesn't use __all__ properly.
+        mod = self.pop()
+        for attr in dir(mod):
+            if attr[0] != '_':
+                self.frame.f_locals[attr] = getattr(mod, attr)
+
+    def IMPORT_FROM(self, name):
+        mod = self.peek(1)
+        self.push(getattr(mod, name))
+
 
     def POP_TOP(self):
         self.stack.pop()
@@ -471,10 +550,22 @@ class VirtualMachine(object):
     def DUP_TOP(self):
         self.push(self.peek(1))
 
+    def DUP_TOPX(self, count):
+        items = self.popn(count)
+        for i in [1, 2]:
+            self.push(*items)
+
     def ROT_TWO(self):
         a, b = self.popn(2)
         self.push(b, a)
 
+    def ROT_THREE(self):
+        a, b, c = self.popn(3)
+        self.push(c, a, b)
+
+    def ROT_FOUR(self):
+        a, b, c, d = self.popn(4)
+        self.push(d, a, b, c)
 
     def DELETE_NAME(self, name):
         del self.frame.f_locals[name]
