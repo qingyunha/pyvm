@@ -28,21 +28,47 @@ class Frame(object):
         
         #refactor
         self.f_lasti = 0
+        if f_code.co_cellvars:
+            self.cells = {}
+            for var in f_code.co_cellvars:
+                # Make a cell for the variable in our locals, or None.
+                cell = self.f_locals.get(var)
+                self.cells[var] = cell
+        else:
+            self.cells = None
+
+        if f_code.co_freevars:
+            if not self.cells:
+                self.cells = {}
+            for var in f_code.co_freevars:
+                self.cells[var] = self.f_locals.get(var)
 
     def update_env(self, env):
         self.f_locals.update(env)
 
+def make_cell(value):
+    fn = (lambda x: lambda: x)(value)
+    return fn.func_closure[0]
+
 class Function(object):
-    def __init__(self, code, defaults, vm):
+    def __init__(self, code, defaults, closure, vm):
         self.func_code = code
         self.func_name = self.__name__ = code.co_name
         self.func_defaults = defaults
+        self.func_closure = closure
         self._vm = vm
+
+        if closure:
+            closure = tuple(make_cell(i) for i in closure)
         self._func = types.FunctionType(code, vm.frame.f_globals, 
-                                              argdefs=tuple(defaults))
+                                              argdefs=tuple(defaults),
+                                              closure=closure)
+                                              
 
     def __call__(self, *args, **kwargs):
         callargs = inspect.getcallargs(self._func, *args, **kwargs)
+        for i, x in  enumerate(self.func_code.co_freevars):
+            callargs[x] = self.func_closure[i]
         frame = self._vm.make_frame(self.func_code,callargs)
         r = self._vm.run_frame(frame)
         return r
@@ -343,6 +369,17 @@ class VirtualMachine(object):
     def STORE_GLOBAL(self, name):
         self.frame.f_globals[name] = self.pop()
 
+
+
+    def LOAD_CLOSURE(self, name):
+        self.push(self.frame.cells[name])
+
+    def LOAD_DEREF(self, name):
+        self.push(self.frame.cells[name])
+
+    def STORE_DEREF(self, name):
+        self.frame.cells[name] = self.pop()
+
     def LOAD_ATTR(self, name):
         target = self.pop()
         val = getattr(target, name)
@@ -486,21 +523,42 @@ class VirtualMachine(object):
     def MAKE_FUNCTION(self, arg):
         code_obj = self.pop()
         defaults = self.popn(arg)
-        fn = Function(code_obj, defaults, self)
+        fn = Function(code_obj, defaults, None, self)
         self.push(fn)
 
+    def MAKE_CLOSURE(self, argc):
+        closure, code = self.popn(2)
+        defaults = self.popn(argc)
+        fn = Function(code, defaults, closure, self)
+        self.push(fn)
 
-    def CALL_FUNCTION(self, argc):
-        logging.debug('call_funciton')
+    def CALL_FUNCTION(self, arg):
+        return self.call_function(arg, [], {})
+
+    def CALL_FUNCTION_VAR(self, arg):
+        args = self.pop()
+        return self.call_function(arg, args, {})
+
+    def CALL_FUNCTION_KW(self, arg):
+        kwargs = self.pop()
+        return self.call_function(arg, [], kwargs)
+
+    def CALL_FUNCTION_VAR_KW(self, arg):
+        args, kwargs = self.popn(2)
+        return self.call_function(arg, args, kwargs)
+
+    def call_function(self, argc, args, kwargs):
+        kwlen, poslen = divmod(argc, 256)
+        logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
+
         namedargs = {}
-        posargs = [] 
-        if argc:
-            kwlen, poslen = divmod(argc, 256)
-            logging.debug("poslen {}, kwlen {}".format(poslen, kwlen))
-            for i in range(kwlen):
-                key, val = self.popn(2)
-                namedargs[key] = val
-            posargs = self.popn(poslen)
+        for i in range(kwlen):
+            key, val = self.popn(2)
+            namedargs[key] = val
+        namedargs.update(kwargs)
+        posargs = self.popn(poslen)
+        posargs.extend(args)
+
         func = self.pop()
         if hasattr(func, 'im_func'):
             # Methods get self as an implicit first parameter.
@@ -714,6 +772,10 @@ class VirtualMachine(object):
     def BINARY_SUBSCR(self):
         v, s = self.popn(2)
         self.push(v[s])
+
+    def BINARY_SUBTRACT(self):
+        a, b = self.popn(2)
+        self.push(a - b)
 
     def STORE_SUBSCR(self):
         v, s = self.popn(2)

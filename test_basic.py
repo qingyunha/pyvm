@@ -7,7 +7,7 @@ import six
 
 PY3, PY2 = six.PY3, not six.PY3
 
-
+# FAILED (failures=3) set, dict comprehension
 class TestIt(vmtest.VmTestCase):
     def test_constant(self):
         self.assert_ok("17")
@@ -531,7 +531,7 @@ class TestIt(vmtest.VmTestCase):
             print(b.x)
             """)
 
-
+# FAILED (errors=1)
 if PY2:
     class TestPrinting(vmtest.VmTestCase):
         def test_printing(self):
@@ -556,7 +556,7 @@ if PY2:
                 print >>sys.stdout, 'hello', 'there'
                 """)
 
-
+# FAILED (errors=3)
 class TestLoops(vmtest.VmTestCase):
     def test_for(self):
         self.assert_ok("""\
@@ -608,7 +608,7 @@ class TestLoops(vmtest.VmTestCase):
             print("done")
             """)
 
-
+# passed
 class TestComparisons(vmtest.VmTestCase):
     def test_in(self):
         self.assert_ok("""\
