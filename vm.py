@@ -5,9 +5,9 @@ import six
 
 CATCH = False
 
-LOGGING_LEVEL=logging.DEBUG
+LOGGING_LEVEL=logging.INFO
 LOGGING_LEVEL=logging.ERROR
-logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL)
+logging.basicConfig(stream=sys.stderr, level=LOGGING_LEVEL, format='%(message)s')
 
 class VirtualMachineError(Exception):
     pass
@@ -28,6 +28,8 @@ class Frame(object):
         
         #refactor
         self.f_lasti = 0
+        self.generator = None
+
         if f_code.co_cellvars:
             self.cells = {}
             for var in f_code.co_cellvars:
@@ -66,11 +68,26 @@ class Function(object):
                                               
 
     def __call__(self, *args, **kwargs):
-        callargs = inspect.getcallargs(self._func, *args, **kwargs)
+        if  self.func_name in ["<setcomp>", "<dictcomp>", "<genexpr>"]:
+            # D'oh! http://bugs.python.org/issue19611 Py2 doesn't know how to
+            # inspect set comprehensions, dict comprehensions, or generator
+            # expressions properly.  They are always functions of one argument,
+            # so just do the right thing.
+            assert len(args) == 1 and not kwargs, "Surprising comprehension!"
+            callargs = {".0": args[0]}
+        else:
+            callargs = inspect.getcallargs(self._func, *args, **kwargs)
         for i, x in  enumerate(self.func_code.co_freevars):
             callargs[x] = self.func_closure[i]
         frame = self._vm.make_frame(self.func_code,callargs)
-        r = self._vm.run_frame(frame)
+
+        CO_GENERATOR = 32           # flag for "this code uses yield"
+        if self.func_code.co_flags & CO_GENERATOR:
+            gen = Generator(frame, self._vm)
+            frame.generator = gen
+            r = gen
+        else:
+            r = self._vm.run_frame(frame)
         return r
 
     def __get__(self, instance, owner):
@@ -98,6 +115,28 @@ class Method(object):
         else:
             return self.im_func(*args, **kwargs)
 
+class Generator(object):
+    def __init__(self, g_frame, vm):
+        self.gi_frame = g_frame
+        self.vm = vm
+        self.started = False
+        self.finished = False
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        return self.send(None)
+
+    def send(self, value=None):
+        if not self.started and value is not None:
+            raise TypeError("Can't send non-None value to a just-started generator")
+        self.gi_frame.stack.append(value)
+        self.started = True
+        val = self.vm.resume_frame(self.gi_frame)
+        if self.finished:
+            raise StopIteration(val)
+        return val
 #nil = object()
 class nil(object):
     pass
@@ -114,7 +153,6 @@ class VirtualMachine(object):
         self.table = lambda x : x
 
     def _reset(self):
-        self.stack = []
         self.jump = False
         self.result = None
         self.frames = []
@@ -138,6 +176,11 @@ class VirtualMachine(object):
         return val
 
 
+    def resume_frame(self, frame):
+        frame.f_back = self.frame
+        val = self.run_frame(frame)
+        frame.f_back = None
+        return val
 
     def run_frame(self, frame):
         self.push_frame(frame)
@@ -193,7 +236,7 @@ class VirtualMachine(object):
     def dispatch(self, byteName, arguments):
         """ Dispatch by bytename to the corresponding methods.
         Exceptions are caught and set on the virtual machine."""
-        #sys.stderr.write(byteName + " " + str(arguments) + '\n')
+        logging.info(byteName + " " + str(arguments) + '\n')
 
         byteName = byteName.replace('+','')
         why = None
@@ -295,11 +338,11 @@ class VirtualMachine(object):
         instead.
 
         """
-        return self.stack.pop(-1-i)
+        return self.frame.stack.pop(-1-i)
 
     def push(self, *vals):
         """Push values onto the value stack."""
-        self.stack.extend(vals)
+        self.frame.stack.extend(vals)
 
     def popn(self, n):
         """Pop a number of values from the value stack.
@@ -308,15 +351,15 @@ class VirtualMachine(object):
 
         """
         if n:
-            ret = self.stack[-n:]
-            self.stack[-n:] = []
+            ret = self.frame.stack[-n:]
+            self.frame.stack[-n:] = []
             return ret
         else:
             return []
 
     def peek(self, n):
         """Get a value `n` entries down in the stack, without changing the stack."""
-        return self.stack[-n]
+        return self.frame.stack[-n]
     
     ### byte instructions
     def LOAD_CONST(self, const):
@@ -397,27 +440,33 @@ class VirtualMachine(object):
         self.push(self.frame.f_locals)
 
     def BINARY_ADD(self):
-        v1 = self.stack.pop()
-        v2 = self.stack.pop()
-        self.stack.append(v2 + v1)
+        v1 = self.pop()
+        v2 = self.pop()
+        self.push(v2 + v1)
 
     def BINARY_MULTIPLY(self):
         v1, v2 = self.popn(2)
         self.push(v2 * v1)
 
     def PRINT_EXPR(self):
-        print self.stack.pop()
+        print self.pop()
 
     def PRINT_ITEM(self):
-        print self.stack.pop(),
+        print self.pop(),
 
     def PRINT_NEWLINE(self):
         print
 
     def RETURN_VALUE(self):
         self.frame.running = False
-        self.return_value =  self.stack.pop()
+        self.return_value =  self.pop()
+        if self.frame.generator:
+            self.frame.generator.finished = True
         return 'return'
+
+    def YIELD_VALUE(self):
+        self.return_value = self.pop()
+        return "yield"
 
     COMPARE_OPERATORS = [
         operator.lt,
@@ -471,15 +520,15 @@ class VirtualMachine(object):
 
 
     def GET_ITER(self):
-        v = self.stack.pop()
-        self.stack.append(iter(v))
+        v = self.pop()
+        self.push(iter(v))
 
     def FOR_ITER(self, step):
-        v = self.stack[-1]
+        v = self.frame.stack[-1]
         try:
-            self.stack.append(v.next())
+            self.push(v.next())
         except StopIteration:
-            self.stack.pop()
+            self.pop()
             self.frame.f_lasti = step
 
     def SETUP_LOOP(self, arg):
@@ -492,8 +541,8 @@ class VirtualMachine(object):
     def BUILD_LIST(self, num):
         r = []
         for i in range(num):
-            r.insert(0, self.stack.pop())
-        self.stack.append(r)
+            r.insert(0, self.pop())
+        self.push(r)
 
     def BUILD_TUPLE(self, num):
         t = self.popn(num)
@@ -504,9 +553,25 @@ class VirtualMachine(object):
         self.push({})
 
 
+    def BUILD_SET(self,count):
+        elts = self.popn(count)
+        self.push(set(elts))
+
+
     def BUILD_CLASS(self):
         name, bases, methods = self.popn(3)
         self.push(type(name, bases, methods))
+
+
+    def SET_ADD(self, count):
+        val = self.pop()
+        the_set = self.peek(count)
+        the_set.add(val)
+
+    def MAP_ADD(self, count):
+        val, key = self.popn(2)
+        the_map = self.peek(count)
+        the_map[key] = val
 
     def STORE_MAP(self):
         val, key = self.popn(2)
@@ -603,7 +668,7 @@ class VirtualMachine(object):
 
 
     def POP_TOP(self):
-        self.stack.pop()
+        self.pop()
 
     def DUP_TOP(self):
         self.push(self.peek(1))
