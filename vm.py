@@ -2,8 +2,9 @@ import dis, inspect, types, operator
 import sys, re
 import logging
 import six
+import collections
 
-CATCH = False
+CATCH = True 
 
 LOGGING_LEVEL=logging.INFO
 LOGGING_LEVEL=logging.ERROR
@@ -29,6 +30,7 @@ class Frame(object):
         #refactor
         self.f_lasti = 0
         self.generator = None
+        self.block_stack = []
 
         if f_code.co_cellvars:
             self.cells = {}
@@ -44,9 +46,12 @@ class Frame(object):
                 self.cells = {}
             for var in f_code.co_freevars:
                 self.cells[var] = self.f_locals.get(var)
+        
 
     def update_env(self, env):
         self.f_locals.update(env)
+
+Block = collections.namedtuple("Block", "type, handler, level")
 
 def make_cell(value):
     fn = (lambda x: lambda: x)(value)
@@ -142,7 +147,6 @@ class nil(object):
     pass
 
 
-## now only a environment for all function 
 class VirtualMachine(object):
     
     HAVE_ARGUMENT = 90
@@ -185,18 +189,78 @@ class VirtualMachine(object):
     def run_frame(self, frame):
         self.push_frame(frame)
         while True:
+            logging.info(str(frame.stack))
+            logging.info(str(frame.block_stack))
             byteName, arguments, opoffset = self.parse_byte()
             why = self.dispatch(byteName, arguments)
+
+            if why == 'return':
+                break
+            
+            if why == 'reraise':
+                why = 'exception'
+
+            if why != 'yield':
+                if why and frame.block_stack:
+                    why = self.manage_block_stack(why)
             if why:
                 break
-
         self.pop_frame()
-
         if why == 'exception':
             print>>sys.stderr, self.last_exception
             six.reraise(*self.last_exception)
 
         return self.return_value
+
+    def push_block(self, type, handler=None, level=None):
+        if level is None:
+            level = len(self.frame.stack)
+        self.frame.block_stack.append(Block(type, handler, level))
+
+    def pop_block(self):
+        return self.frame.block_stack.pop()
+
+   
+    def manage_block_stack(self, why):
+        logging.info("enter manager")
+
+        block = self.frame.block_stack[-1]
+        if block.type == 'loop' and why == 'continue':
+            self.frame.f_lasti = self.return_value 
+            why = None
+            return why
+            
+        block = self.pop_block()
+        if block.type == 'loop' and why == 'break':
+            logging.info("for  loop break")
+            why = None
+            self.frame.f_lasti = block.handler 
+            return why
+
+        if block.type == 'except':
+            if why == 'exception':
+                logging.info("for  excepting")
+                exctype, value, tb = self.last_exception
+                self.push(tb, value, exctype)
+                why = None
+                self.frame.f_lasti = block.handler 
+                return why
+            if why == 'continue':
+                self.frame.f_lasti = self.return_value 
+                why = None
+                return why
+
+        if block.type == 'finally':
+            if why == 'exception':
+                exctype, value, tb = self.last_exception
+                self.push(tb, value, exctype)
+            if why == 'continue':
+                self.push(self.return_value)
+                self.push(why)
+            why = None
+            self.frame.f_lasti = block.handler 
+            return why
+
 
     def parse_byte(self):
         f = self.frame
@@ -234,8 +298,6 @@ class VirtualMachine(object):
 
 
     def dispatch(self, byteName, arguments):
-        """ Dispatch by bytename to the corresponding methods.
-        Exceptions are caught and set on the virtual machine."""
         logging.info(byteName + " " + str(arguments) + '\n')
 
         byteName = byteName.replace('+','')
@@ -454,8 +516,17 @@ class VirtualMachine(object):
     def PRINT_ITEM(self):
         print self.pop(),
 
+    def PRINT_ITEM_TO(self):
+        to = self.pop()
+        item = self.pop()
+        print>>to, item,
+
     def PRINT_NEWLINE(self):
         print
+
+    def PRINT_NEWLINE_TO(self):
+        to = self.pop()
+        print>>to
 
     def RETURN_VALUE(self):
         self.frame.running = False
@@ -531,11 +602,40 @@ class VirtualMachine(object):
             self.pop()
             self.frame.f_lasti = step
 
-    def SETUP_LOOP(self, arg):
-        pass
+    def SETUP_LOOP(self, dest):
+        self.push_block('loop', dest)
+
+    def SETUP_EXCEPT(self, dest):
+        self.push_block('except', dest)
+
+    def SETUP_FINALLY(self, dest):
+        self.push_block('finally', dest)
+
+    def END_FINALLY(self):
+        v = self.pop()
+        if isinstance(v, str):
+            why = v
+            if why == 'continue':
+                self.return_value = self.pop()
+        elif v is None:
+            why = None
+        elif issubclass(v, BaseException):
+            exctype = v
+            val = self.pop()
+            tb = self.pop()
+            self.last_exception = (exctype, val, tb)
+            why = 'reraise'
+        return why
 
     def POP_BLOCK(self):
-        pass
+        self.pop_block()
+
+    def BREAK_LOOP(self):
+        return 'break'
+
+    def CONTINUE_LOOP(self, dest):
+        self.return_value = dest
+        return 'continue'
 
 
     def BUILD_LIST(self, num):
