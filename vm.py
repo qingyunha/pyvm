@@ -35,7 +35,6 @@ class Frame(object):
         if f_code.co_cellvars:
             self.cells = {}
             for var in f_code.co_cellvars:
-                # Make a cell for the variable in our locals, or None.
                 cell = self.f_locals.get(var)
                 self.cells[var] = cell
         else:
@@ -169,10 +168,9 @@ class VirtualMachine(object):
     def run_code(self, code):
         frame = self.make_frame(code)
         val = self.run_frame(frame)
-        # Check some invariants
-        if self.frames:            # pragma: no cover
+        if self.frames:            
             raise VirtualMachineError("Frames left over!")
-        if self.frame and self.frame.stack:             # pragma: no cover
+        if self.frame and self.frame.stack:             
             raise VirtualMachineError("Data left on stack! %r" % self.frame.stack)
 
         return val
@@ -303,19 +301,17 @@ class VirtualMachine(object):
         if CATCH:
             try:
                 bytecode_fn = getattr(self,  byteName, None)
-                if not bytecode_fn:            # pragma: no cover
+                if not bytecode_fn:            
                     raise VirtualMachineError(
                         "unknown bytecode type: %s" % byteName
                     )
                 why = bytecode_fn(*arguments)
             except:
-                # deal with exceptions encountered while executing the op.
                 self.last_exception = sys.exc_info()[:2] + (None,)
-                #log.exception("Caught exception during execution")
                 why = 'exception'
         else:
             bytecode_fn = getattr(self,  byteName, None)
-            if not bytecode_fn:            # pragma: no cover
+            if not bytecode_fn:            
                 raise VirtualMachineError(
                     "unknown bytecode type: %s" % byteName
                 )
@@ -738,10 +734,8 @@ class VirtualMachine(object):
 
         func = self.pop()
         if hasattr(func, 'im_func'):
-            # Methods get self as an implicit first parameter.
             if func.im_self:
                 posargs.insert(0, func.im_self)
-            # The first parameter must be the correct type.
             if not isinstance(posargs[0], func.im_class):
                 raise TypeError(
                     'unbound method %s() must be called with %s instance '
@@ -962,8 +956,6 @@ class VirtualMachine(object):
         del v[s]
 
     def RAISE_VARARGS(self, argc):
-        # NOTE: the dis docs are completely wrong about the order of the
-        # operands on the stack!
         exctype = val = tb = None
         if argc == 0:
             exctype, val, tb = self.last_exception
@@ -977,7 +969,6 @@ class VirtualMachine(object):
             val = self.pop()
             exctype = self.pop()
 
-        # There are a number of forms of "raise", normalize them somewhat.
         if isinstance(exctype, BaseException):
             val = exctype
             exctype = type(val)
