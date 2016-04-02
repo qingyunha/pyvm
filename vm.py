@@ -74,10 +74,7 @@ class Function(object):
 
     def __call__(self, *args, **kwargs):
         if  self.func_name in ["<setcomp>", "<dictcomp>", "<genexpr>"]:
-            # D'oh! http://bugs.python.org/issue19611 Py2 doesn't know how to
-            # inspect set comprehensions, dict comprehensions, or generator
-            # expressions properly.  They are always functions of one argument,
-            # so just do the right thing.
+            #  http://bugs.python.org/issue19611 
             assert len(args) == 1 and not kwargs, "Surprising comprehension!"
             callargs = {".0": args[0]}
         else:
@@ -86,7 +83,7 @@ class Function(object):
             callargs[x] = self.func_closure[i]
         frame = self._vm.make_frame(self.func_code,callargs)
 
-        CO_GENERATOR = 32           # flag for "this code uses yield"
+        CO_GENERATOR = 32           
         if self.func_code.co_flags & CO_GENERATOR:
             gen = Generator(frame, self._vm)
             frame.generator = gen
@@ -107,7 +104,7 @@ class Method(object):
         self.im_class = _class
         self.im_func = func
 
-    def __repr__(self):         # pragma: no cover
+    def __repr__(self):     
         name = "%s.%s" % (self.im_class.__name__, self.im_func.func_name)
         if self.im_self is not None:
             return '<Bound Method %s of %s>' % (name, self.im_self)
@@ -142,6 +139,7 @@ class Generator(object):
         if self.finished:
             raise StopIteration(val)
         return val
+
 #nil = object()
 class nil(object):
     pass
@@ -627,6 +625,20 @@ class VirtualMachine(object):
             why = 'reraise'
         return why
 
+    def SETUP_WITH(self, dest):
+        ctxmgr = self.pop()
+        self.push(ctxmgr.__exit__)
+        ctxmgr_obj = ctxmgr.__enter__()
+        self.push(ctxmgr_obj)
+        self.push_block('with', dest)
+
+    def WITH_CLEANUP(self):
+        v = w = None
+        u = self.peek(1)
+        if u is None:
+            exit_func = self.pop(1)
+        exit_ret = exit_func(w, v, u)
+
     def POP_BLOCK(self):
         self.pop_block()
 
@@ -756,7 +768,6 @@ class VirtualMachine(object):
         )
 
     def IMPORT_STAR(self):
-        # TODO: this doesn't use __all__ properly.
         mod = self.pop()
         for attr in dir(mod):
             if attr[0] != '_':

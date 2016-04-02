@@ -1,16 +1,8 @@
-"""Test exceptions for Byterun."""
-
 from __future__ import print_function
 import vmtest
 
-import six
-
-PY3, PY2 = six.PY3, not six.PY3
-
-
 class TestExceptions(vmtest.VmTestCase):
     def test_catching_exceptions(self):
-        # Catch the exception precisely
         self.assert_ok("""\
             try:
                 [][1]
@@ -18,7 +10,6 @@ class TestExceptions(vmtest.VmTestCase):
             except IndexError:
                 print("caught it!")
             """)
-        # Catch the exception by a parent class
         self.assert_ok("""\
             try:
                 [][1]
@@ -26,7 +17,6 @@ class TestExceptions(vmtest.VmTestCase):
             except Exception:
                 print("caught it!")
             """)
-        # Catch all exceptions
         self.assert_ok("""\
             try:
                 [][1]
@@ -41,19 +31,18 @@ class TestExceptions(vmtest.VmTestCase):
     def test_raise_exception_class(self):
         self.assert_ok("raise ValueError", raises=ValueError)
 
-    if PY2:
-        def test_raise_exception_2args(self):
-            self.assert_ok("raise ValueError, 'bad'", raises=ValueError)
+    def test_raise_exception_2args(self):
+        self.assert_ok("raise ValueError, 'bad'", raises=ValueError)
 
-        def test_raise_exception_3args(self):
-            self.assert_ok("""\
-                from sys import exc_info
-                try:
-                    raise Exception
-                except:
-                    _, _, tb = exc_info()
-                raise ValueError, "message", tb
-                """, raises=ValueError)
+    def test_raise_exception_3args(self):
+        self.assert_ok("""\
+            from sys import exc_info
+            try:
+                raise Exception
+            except:
+                _, _, tb = exc_info()
+            raise ValueError, "message", tb
+            """, raises=ValueError)
 
     def test_raise_and_catch_exception(self):
         self.assert_ok("""\
@@ -63,13 +52,6 @@ class TestExceptions(vmtest.VmTestCase):
                 print("Caught: %s" % e)
             print("All done")
             """)
-
-    if PY3:
-        def test_raise_exception_from(self):
-            self.assert_ok(
-                "raise ValueError from NameError",
-                raises=ValueError
-            )
 
     def test_raise_and_catch_exception_in_function(self):
         self.assert_ok("""\

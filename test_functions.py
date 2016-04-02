@@ -1,10 +1,5 @@
-"""Test functions etc, for Byterun."""
-
 from __future__ import print_function
 import vmtest
-import six
-
-PY3 = six.PY3
 
 # FAILED (failures=1) wraps
 class TestFunctions(vmtest.VmTestCase):
@@ -276,37 +271,6 @@ class TestGenerators(vmtest.VmTestCase):
 
             print(Thing().boom())
             """)
-
-    if PY3: # PY3.3+ only
-        def test_yield_from(self):
-            self.assert_ok("""\
-                def main():
-                    x = outer()
-                    next(x)
-                    y = x.send("Hello, World")
-                    print(y)
-
-                def outer():
-                    yield from inner()
-
-                def inner():
-                    y = yield
-                    yield y
-
-                main()
-                """)
-
-        def test_yield_from_tuple(self):
-            self.assert_ok("""\
-                def main():
-                    for x in outer():
-                        print(x)
-
-                def outer():
-                    yield from (1, 2, 3, 4)
-
-                main()
-                """)
 
         def test_distinguish_iterators_and_generators(self):
             self.assert_ok("""\

@@ -1,11 +1,5 @@
-"""Basic tests for Byterun."""
-
 from __future__ import print_function
 import vmtest
-
-import six
-
-PY3, PY2 = six.PY3, not six.PY3
 
 # FAILED (failures=3) set, dict comprehension
 class TestIt(vmtest.VmTestCase):
@@ -49,28 +43,16 @@ class TestIt(vmtest.VmTestCase):
             assert x == 0xA6
             """)
 
-    if PY2:
-        def test_inplace_division(self):
-            self.assert_ok("""\
-                x, y = 24, 3
-                x /= y
-                assert x == 8 and y == 3
-                assert isinstance(x, int)
-                x /= y
-                assert x == 2 and y == 3
-                assert isinstance(x, int)
-                """)
-    elif PY3:
-        def test_inplace_division(self):
-            self.assert_ok("""\
-                x, y = 24, 3
-                x /= y
-                assert x == 8.0 and y == 3
-                assert isinstance(x, float)
-                x /= y
-                assert x == (8.0/3.0) and y == 3
-                assert isinstance(x, float)
-                """)
+    def test_inplace_division(self):
+        self.assert_ok("""\
+            x, y = 24, 3
+            x /= y
+            assert x == 8 and y == 3
+            assert isinstance(x, int)
+            x /= y
+            assert x == 2 and y == 3
+            assert isinstance(x, int)
+            """)
 
     def test_slice(self):
         self.assert_ok("""\
@@ -173,9 +155,6 @@ class TestIt(vmtest.VmTestCase):
             x = "-".join(str(z) for z in range(5))
             assert x == "0-1-2-3-4"
             """)
-        # From test_regr.py
-        # This failed a different way than the previous join when genexps were
-        # broken:
         self.assert_ok("""\
             from textwrap import fill
             x = set(['test_str'])
@@ -205,7 +184,6 @@ class TestIt(vmtest.VmTestCase):
             """)
 
     def test_strange_sequence_ops(self):
-        # from stdlib: test/test_augassign.py
         self.assert_ok("""\
             x = [1,2]
             x += [3,4]
@@ -230,7 +208,7 @@ class TestIt(vmtest.VmTestCase):
 
     def test_attributes(self):
         self.assert_ok("""\
-            l = lambda: 1   # Just to have an object...
+            l = lambda: 1   
             l.foo = 17
             print(hasattr(l, "foo"), l.foo)
             del l.foo
@@ -239,7 +217,7 @@ class TestIt(vmtest.VmTestCase):
 
     def test_attribute_inplace_ops(self):
         self.assert_ok("""\
-            l = lambda: 1   # Just to have an object...
+            l = lambda: 1   
             l.foo = 17
             l.foo -= 3
             print(l.foo)
@@ -452,20 +430,12 @@ class TestIt(vmtest.VmTestCase):
             assert c == 3
             """)
 
-    if PY2:
-        def test_exec_statement(self):
-            self.assert_ok("""\
-                g = {}
-                exec "a = 11" in g, g
-                assert g['a'] == 11
-                """)
-    elif PY3:
-        def test_exec_statement(self):
-            self.assert_ok("""\
-                g = {}
-                exec("a = 11", g, g)
-                assert g['a'] == 11
-                """)
+    def test_exec_statement(self):
+        self.assert_ok("""\
+            g = {}
+            exec "a = 11" in g, g
+            assert g['a'] == 11
+            """)
 
     def test_jump_if_true_or_pop(self):
         self.assert_ok("""\
@@ -512,10 +482,6 @@ class TestIt(vmtest.VmTestCase):
             """)
 
     def test_multiple_classes(self):
-        # Making classes used to mix together all the class-scoped values
-        # across classes.  This test would fail because A.__init__ would be
-        # over-written with B.__init__, and A(1, 2, 3) would complain about
-        # too many arguments.
         self.assert_ok("""\
             class A(object):
                 def __init__(self, a, b, c):
@@ -532,29 +498,28 @@ class TestIt(vmtest.VmTestCase):
             """)
 
 # FAILED (errors=1)
-if PY2:
-    class TestPrinting(vmtest.VmTestCase):
-        def test_printing(self):
-            self.assert_ok("print 'hello'")
-            self.assert_ok("a = 3; print a+4")
-            self.assert_ok("""
-                print 'hi', 17, u'bye', 23,
-                print "", "\t", "the end"
-                """)
+class TestPrinting(vmtest.VmTestCase):
+    def test_printing(self):
+        self.assert_ok("print 'hello'")
+        self.assert_ok("a = 3; print a+4")
+        self.assert_ok("""
+            print 'hi', 17, u'bye', 23,
+            print "", "\t", "the end"
+            """)
 
-        def test_printing_in_a_function(self):
-            self.assert_ok("""\
-                def fn():
-                    print "hello"
-                fn()
-                print "bye"
-                """)
+    def test_printing_in_a_function(self):
+        self.assert_ok("""\
+            def fn():
+                print "hello"
+            fn()
+            print "bye"
+            """)
 
-        def test_printing_to_a_file(self):
-            self.assert_ok("""\
-                import sys
-                print >>sys.stdout, 'hello', 'there'
-                """)
+    def test_printing_to_a_file(self):
+        self.assert_ok("""\
+            import sys
+            print >>sys.stdout, 'hello', 'there'
+            """)
 
 # FAILED (errors=3)
 class TestLoops(vmtest.VmTestCase):
@@ -575,7 +540,6 @@ class TestLoops(vmtest.VmTestCase):
             """)
 
     def test_continue(self):
-        # fun fact: this doesn't use CONTINUE_LOOP
         self.assert_ok("""\
             for i in range(10):
                 if i % 3 == 0:
