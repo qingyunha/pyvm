@@ -705,20 +705,20 @@ class VirtualMachine(object):
         fn = Function(code, defaults, closure, self)
         self.push(fn)
 
-    def CALL_FUNCTION(self, arg):
-        return self.call_function(arg, [], {})
+    def CALL_FUNCTION(self, argc):
+        return self.call_function(argc, [], {})
 
-    def CALL_FUNCTION_VAR(self, arg):
+    def CALL_FUNCTION_VAR(self, argc):
         args = self.pop()
-        return self.call_function(arg, args, {})
+        return self.call_function(argc, args, {})
 
-    def CALL_FUNCTION_KW(self, arg):
+    def CALL_FUNCTION_KW(self, argc):
         kwargs = self.pop()
-        return self.call_function(arg, [], kwargs)
+        return self.call_function(argc, [], kwargs)
 
-    def CALL_FUNCTION_VAR_KW(self, arg):
+    def CALL_FUNCTION_VAR_KW(self, argc):
         args, kwargs = self.popn(2)
-        return self.call_function(arg, args, kwargs)
+        return self.call_function(argc, args, kwargs)
 
     def call_function(self, argc, args, kwargs):
         kwlen, poslen = divmod(argc, 256)
