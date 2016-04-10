@@ -523,7 +523,6 @@ class VirtualMachine(object):
         print>>to
 
     def RETURN_VALUE(self):
-        self.frame.running = False
         self.return_value =  self.pop()
         if self.frame.generator:
             self.frame.generator.finished = True
