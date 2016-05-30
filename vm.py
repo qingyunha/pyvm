@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import dis, inspect, types, operator
 import sys, re
 import logging
@@ -203,7 +204,8 @@ class VirtualMachine(object):
                 break
         self.pop_frame()
         if why == 'exception':
-            print>>sys.stderr, self.last_exception
+            # print>>sys.stderr, self.last_exception
+            # 交给上层frame处理异常
             six.reraise(*self.last_exception)
 
         return self.return_value
@@ -469,7 +471,6 @@ class VirtualMachine(object):
         self.frame.f_globals[name] = self.pop()
 
 
-
     def LOAD_CLOSURE(self, name):
         self.push(self.frame.cells[name])
 
@@ -495,14 +496,52 @@ class VirtualMachine(object):
     def LOAD_LOCALS(self):
         self.push(self.frame.f_locals)
 
+
+    def UNARY_POSITIVE(self):
+        self.push(+self.pop())
+
+    def UNARY_NEGATIVE(self):
+        self.push(-self.pop())
+
+    def UNARY_INVERT(self):
+        self.push(~self.pop())
+
+    def UNARY_NOT(self):
+        self.push(not self.pop())
+
+    def UNARY_CONVERT(self):
+        self.push(repr(self.pop()))
+
+
     def BINARY_ADD(self):
         v1 = self.pop()
         v2 = self.pop()
         self.push(v2 + v1)
 
+    def BINARY_SUBTRACT(self):
+        a, b = self.popn(2)
+        self.push(a - b)
+
     def BINARY_MULTIPLY(self):
         v1, v2 = self.popn(2)
         self.push(v2 * v1)
+
+    def BINARY_DIVIDE(self):
+        v1, v2 = self.popn(2)
+        self.push(v1/v2)
+
+    def BINARY_POWER(self):
+        v1, v2 = self.popn(2)
+        self.push(v2 ** v1)
+
+    def BINARY_MODULO(self):
+        v1, v2 = self.popn(2)
+        self.push(v1 % v2)
+
+    def BINARY_SUBSCR(self):
+        v, s = self.popn(2)
+        self.push(v[s])
+
 
     def PRINT_EXPR(self):
         print self.pop()
@@ -924,27 +963,7 @@ class VirtualMachine(object):
             start, stop, step = self.popn(3)
         self.push(slice(start, stop, step))
 
-    def UNARY_NEGATIVE(self):
-        self.push(-self.pop())
 
-    def UNARY_INVERT(self):
-        self.push(~self.pop())
-
-    def UNARY_NOT(self):
-        self.push(not self.pop())
-
-
-    def BINARY_MODULO(self):
-        a, b = self.popn(2)
-        self.push(a % b)
-
-    def BINARY_SUBSCR(self):
-        v, s = self.popn(2)
-        self.push(v[s])
-
-    def BINARY_SUBTRACT(self):
-        a, b = self.popn(2)
-        self.push(a - b)
 
     def STORE_SUBSCR(self):
         v, s = self.popn(2)
@@ -973,11 +992,13 @@ class VirtualMachine(object):
             exctype = type(val)
 
         self.last_exception = (exctype, val, tb)
-
         if tb:
             return 'reraise'
         else:
             return 'exception'
+    
+    def NOP():
+        pass
 
 if __name__ == '__main__':
     import unittest
