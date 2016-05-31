@@ -542,6 +542,26 @@ class VirtualMachine(object):
         v, s = self.popn(2)
         self.push(v[s])
 
+    def BINARY_LSHIFT(self):
+        v, s = self.popn(2)
+        self.push(s << v)
+
+    def BINARY_RSHIFT(self):
+        v, s = self.popn(2)
+        self.push(s >> v)
+
+    def BINARY_AND(self):
+        v1, v2 = self.popn(2)
+        self.push(v1 & v2)
+
+    def BINARY_XOR(self):
+        v1, v2 = self.popn(2)
+        self.push(v1 ^ v2)
+
+    def BINARY_OR(self):
+        v1, v2 = self.popn(2)
+        self.push(v1 | v2)
+
 
     def PRINT_EXPR(self):
         print self.pop()
