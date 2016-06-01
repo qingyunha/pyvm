@@ -470,6 +470,8 @@ class VirtualMachine(object):
     def STORE_GLOBAL(self, name):
         self.frame.f_globals[name] = self.pop()
 
+    def DELETE_GLOBAL(self, name):
+        del self.frame.f_globals[name]
 
     def LOAD_CLOSURE(self, name):
         self.push(self.frame.cells[name])
@@ -714,15 +716,13 @@ class VirtualMachine(object):
         t = self.popn(num)
         self.push(tuple(t))
 
-
     def BUILD_MAP(self, size):
+        # 忽略size
         self.push({})
-
 
     def BUILD_SET(self,count):
         elts = self.popn(count)
         self.push(set(elts))
-
 
     def BUILD_CLASS(self):
         name, bases, methods = self.popn(3)
